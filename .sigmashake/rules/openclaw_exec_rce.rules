@@ -1,0 +1,99 @@
+# openclaw_exec_rce.rules — OpenClaw RCE and exposure prevention.
+# Technology: openclaw | Capability: exec
+# Covers: CVE-2026-25253 (one-click RCE via URL params), skill installation from
+# malicious ClawHub, 0.0.0.0 binding, network enablement, and server audit logging.
+
+rule no-openclaw-url-param-injection {
+  enabled true
+  priority 100
+  severity error
+  DENY execution
+  IF command REGEX "openclaw.*--url\\s+.*[;&|`$]"
+  OR command REGEX "openclaw.*--endpoint\\s+.*[;&|`]"
+  OR command REGEX "openclaw.*-u\\s+.*[;&|`$]"
+  MESSAGE "CVE-2026-25253: One-click RCE via OpenClaw URL parameter exploitation. The Control UI trusted URL parameters without validation, enabling arbitrary code execution via a single malicious link. 21,639 exposed instances were found on the internet. URL parameters with shell metacharacters in OpenClaw invocations are blocked."
+}
+
+rule no-openclaw-skill-install {
+  enabled true
+  priority 100
+  severity error
+  DENY execution
+  IF command REGEX "openclaw.*skill.*install"
+  OR command REGEX "openclaw.*plugin.*add"
+  OR command REGEX "openclaw.*skill.*add"
+  OR command CONTAINS "clawhub" AND command CONTAINS "install"
+  OR command CONTAINS "clawhub" AND command CONTAINS "add"
+  MESSAGE "OpenClaw skill installation blocked. Security researchers found 820+ malicious skills out of 10,700 on ClawHub (7.7% malware rate), increasing from 324 to 820 in weeks. Malicious skills achieved: unauthorized crypto-mining, data exfiltration, and lateral movement. All skill installations require manual source code review."
+}
+
+rule no-openclaw-public-binding {
+  enabled true
+  priority 95
+  severity error
+  DENY execution
+  IF command REGEX "openclaw.*--host\\s+0\\.0\\.0\\.0"
+  OR command REGEX "openclaw.*--bind\\s+0\\.0\\.0\\.0"
+  OR command REGEX "openclaw.*0\\.0\\.0\\.0:[0-9]"
+  OR command REGEX "openclaw.*--host\\s+::"
+  MESSAGE "OpenClaw binding to all network interfaces. 21,639 OpenClaw instances have been found publicly exposed on the internet (Censys, 2026). The official documentation states 'there is no perfectly secure setup'. Never bind to 0.0.0.0 or :: — use 127.0.0.1 for local access only."
+}
+
+rule ask-openclaw-network-access {
+  enabled true
+  priority 85
+  severity warning
+  ASK execution
+  IF command REGEX "openclaw.*(--network|--internet|--allow-net|--enable-net)"
+  OR command REGEX "openclaw.*--no-sandbox"
+  MESSAGE "OpenClaw network access enablement. OpenClaw agents with network access were used in the attack on 10 Mexican government agencies (early March 2026), compromising 100M+ citizen records. Restrict network access to specific trusted hosts."
+  PROMPT "Is full network access necessary? OpenClaw was used in the Mexican government attack that stole 100M+ records. Consider restricting to specific trusted hostnames rather than enabling full internet access."
+}
+
+rule log-openclaw-server-start {
+  enabled true
+  priority 60
+  severity info
+  LOG execution
+  IF command STARTS_WITH "openclaw"
+  OR command REGEX "openclaw\\s+(serve|start|run)"
+  MESSAGE "OpenClaw server started. 21,639 exposed instances documented by Censys. Verify binding is to 127.0.0.1 only. OpenClaw documentation acknowledges: 'there is no perfectly secure setup'."
+}
+
+rule no-openclaw-system-run {
+  enabled true
+  priority 100
+  severity error
+  DENY execution
+  IF command REGEX "openclaw.*system\\.run"
+  OR command REGEX "openclaw.*--run\\s+.*\\$\\("
+  OR command REGEX "openclaw.*node.*--exec\\s"
+  OR command REGEX "openclaw.*(paired|remote).*exec"
+  MESSAGE "OpenClaw system.run invocation blocked. The system.run tool allows remote code execution on paired Mac nodes — this is OpenClaw's highest-privilege capability. Any tool-authority delegation via shared channels or prompt injection that reaches system.run achieves full host RCE. Paired node execution must be manually initiated and reviewed."
+}
+
+rule no-openclaw-sandbox-escape {
+  enabled true
+  priority 95
+  severity error
+  DENY execution
+  IF command REGEX "openclaw.*docker.*--privileged"
+  OR command REGEX "openclaw.*docker.*--cap-add(=|\\s+)ALL"
+  OR command REGEX "openclaw.*docker.*--no-sandbox"
+  OR command REGEX "openclaw.*docker.*--disable-seccomp"
+  OR command REGEX "openclaw.*sandbox.*mode.*off"
+  MESSAGE "OpenClaw sandbox escape attempt blocked. The sandbox is the primary blast-radius control for OpenClaw tool execution. '--privileged' grants full host capabilities; '--cap-add=ALL' achieves the same. '--no-sandbox' disables Chromium's renderer isolation. These flags negate OpenClaw's Docker-based sandboxing and restore full host attack surface."
+}
+
+rule no-openclaw-eval-injection {
+  enabled true
+  priority 95
+  severity error
+  DENY execution
+  IF command REGEX "openclaw.*eval\\s*\\("
+  OR command REGEX "openclaw.*new\\s+Function\\s*\\("
+  OR command REGEX "openclaw.*vm\\.runInNewContext"
+  OR command REGEX "openclaw.*vm\\.runInThisContext"
+  OR command REGEX "openclaw.*require\\s*\\(.*\\$"
+  MESSAGE "Dynamic code evaluation in OpenClaw context blocked. eval(), new Function(), and vm.run* execute arbitrary strings as code — the primary mechanism used by malicious ClawHub skills (820+ identified, 7.7% malware rate) to bypass static analysis. In-process plugin execution gives these constructs full access to OpenClaw's in-memory secrets and config."
+}

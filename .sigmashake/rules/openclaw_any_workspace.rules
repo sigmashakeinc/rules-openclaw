@@ -1,0 +1,66 @@
+# openclaw_any_workspace.rules — OpenClaw workspace boundary and container safety.
+# Technology: openclaw | Capability: any
+# Covers: cross-agent path traversal, bind mount root escapes, workspace root mounts,
+# privileged container execution, and workspace boundary auditing.
+
+rule no-openclaw-cross-agent-read {
+  enabled true
+  priority 95
+  severity error
+  DENY read
+  IF path REGEX "\\.openclaw/sandboxes/[^/]+/\\.\\."
+  OR path REGEX "\\.openclaw/agents/[^/]+/\\.\\."
+  OR path REGEX "(/workspace|/agent)/\\.\\."
+  OR path REGEX "\\.openclaw/.*(sandbox|agent).*/\\.\\./"
+  MESSAGE "Cross-agent workspace traversal blocked. OpenClaw's sandbox.scope options ('agent', 'session', 'shared') define isolation boundaries — path traversal via '../' escapes the intended sandbox scope and reads another agent's workspace. OpenClaw's 'scope: agent' provides one container per agent precisely to prevent this cross-contamination. Path traversal from within a workspace boundary is treated as a sandbox escape attempt."
+}
+
+rule no-openclaw-bind-mount-escape {
+  enabled true
+  priority 100
+  severity error
+  DENY execution
+  IF command REGEX "docker run.*-v\\s+/:/[a-z]"
+  OR command REGEX "docker run.*--volume\\s+/:/[a-z]"
+  OR command REGEX "docker run.*-v\\s+/etc:/[a-z]"
+  OR command REGEX "docker run.*-v\\s+/proc:/[a-z]"
+  OR command REGEX "docker run.*-v\\s+/sys:/[a-z]"
+  OR command REGEX "docker run.*-v.*docker\\.sock"
+  MESSAGE "Dangerous Docker bind mount in OpenClaw context blocked. Mounting '/' (root) or '/etc', '/proc', '/sys' into a container provides full host filesystem access, negating sandbox isolation entirely. Mounting docker.sock grants control over the Docker daemon — equivalent to root access on the host. OpenClaw validates bind mount sources through symlink-aware path resolution, but this command-level check catches attempts before execution."
+}
+
+rule no-openclaw-workspace-root-mount {
+  enabled true
+  priority 80
+  severity warning
+  ASK execution
+  IF command REGEX "docker run.*-v\\s+~:/workspace"
+  OR command REGEX "docker run.*-v\\s+\\$HOME:/workspace"
+  OR command REGEX "openclaw.*workspaceAccess.*rw" AND command REGEX "workspaceRoot.*~"
+  OR command REGEX "docker run.*-v.*/home/[^/]+:/workspace:rw"
+  MESSAGE "OpenClaw workspace root bind mount requires review. Mounting the home directory as the workspace root exposes all files under ~ — including ~/.openclaw/, ~/.ssh/, ~/.aws/, ~/.kube/, and all project files — to the sandboxed agent with read-write access. OpenClaw's documentation recommends 'narrow workspace roots' and using ':ro' for sensitive mounts. Only mount the specific project directory the agent needs."
+  PROMPT "This mounts the home directory or a broad path as the OpenClaw workspace. Any agent in this sandbox can read and write all files under that path. Use a narrow project-specific path instead (e.g., ~/projects/myproject) and add ':ro' if write access is not required."
+}
+
+rule ask-openclaw-privileged-container {
+  enabled true
+  priority 85
+  severity warning
+  ASK execution
+  IF command REGEX "docker run.*--privileged.*openclaw"
+  OR command REGEX "openclaw.*docker.*--privileged"
+  OR command REGEX "openclaw.*sandbox.*privileged.*true"
+  MESSAGE "Privileged container in OpenClaw context requires review. '--privileged' grants the container nearly all Linux capabilities and disables seccomp/AppArmor profiles — effectively giving the sandboxed agent root-equivalent access to the host kernel. OpenClaw's sandbox documentation specifically validates that seccomp/AppArmor profiles are present; '--privileged' bypasses this validation entirely."
+  PROMPT "Running an OpenClaw sandbox container with --privileged removes all kernel capability restrictions and disables seccomp/AppArmor. This provides root-equivalent host access. Is there a specific capability needed? Use '--cap-add=<SPECIFIC_CAP>' for the minimum required capability instead."
+}
+
+rule log-openclaw-workspace-boundary {
+  enabled true
+  priority 55
+  severity info
+  LOG any
+  IF path REGEX "\\.openclaw/sandboxes/"
+  OR path REGEX "(/workspace|/agent|/sandbox)/\\.sigmashake"
+  OR path REGEX "\\.openclaw/sandboxes/[^/]+/workspace"
+  MESSAGE "OpenClaw sandbox workspace boundary access logged. Workspace boundary operations — especially reads of .sigmashake governance files from inside a sandbox — are audit-significant: they may indicate an agent attempting to read or modify its own governance rules from within the sandboxed environment."
+}

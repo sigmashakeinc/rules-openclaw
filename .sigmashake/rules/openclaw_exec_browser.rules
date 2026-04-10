@@ -1,0 +1,75 @@
+# openclaw_exec_browser.rules — OpenClaw browser control security.
+# Technology: openclaw | Capability: exec, browser
+# Covers: CDP access, credential harvesting, browser SSRF to private networks,
+# headless browser review, file:// protocol, and browser launch auditing.
+
+rule no-openclaw-cdp-access {
+  enabled true
+  priority 95
+  severity error
+  DENY execution
+  IF command REGEX "openclaw.*--remote-debugging-port"
+  OR command REGEX "openclaw.*--remote-debugging-address"
+  OR command REGEX "openclaw.*cdp.*endpoint"
+  OR command REGEX "openclaw.*chrome.*--remote-debug"
+  MESSAGE "OpenClaw CDP (Chrome DevTools Protocol) endpoint exposure blocked. OpenClaw's browser control grants the model the ability to drive a real browser — giving full access to logged-in sessions, stored credentials, and browser-accessible accounts. Exposing the CDP endpoint extends this access to any process or network host that can reach the debugging port, including attackers on the LAN."
+}
+
+rule no-openclaw-credential-harvest {
+  enabled true
+  priority 100
+  severity error
+  DENY execution
+  IF command REGEX "openclaw.*browse.*(chrome|firefox|safari).*password"
+  OR command REGEX "openclaw.*navigate.*(passwords|credentials|keychain|wallet)"
+  OR command REGEX "openclaw.*(chrome|chromium).*user-data-dir.*(Login Data|Cookies|Web Data)"
+  OR command REGEX "openclaw.*browser.*(chrome://settings/passwords|about:logins)"
+  MESSAGE "Browser credential harvesting via OpenClaw blocked. OpenClaw's browser control documentation explicitly warns that enabling it 'gives the model the ability to drive a real browser' — including access to logged-in sessions, credential managers, and profile data. Navigating to browser password stores or credential databases via OpenClaw tool calls is a direct path to full credential exfiltration."
+}
+
+rule no-openclaw-browser-ssrf-private {
+  enabled true
+  priority 95
+  severity error
+  DENY execution
+  IF command CONTAINS "openclaw" AND command REGEX "(browse|navigate).*127\\.0\\.0\\.1"
+  OR command CONTAINS "openclaw" AND command REGEX "(browse|navigate).*localhost"
+  OR command CONTAINS "openclaw" AND command REGEX "(browse|navigate).*\\[::1\\]"
+  OR command CONTAINS "openclaw" AND command REGEX "(browse|navigate).*169\\.254\\."
+  OR command CONTAINS "openclaw" AND command REGEX "(browse|navigate).*192\\.168\\."
+  OR command CONTAINS "openclaw" AND command REGEX "(browse|navigate).*10\\.[0-9]+\\.[0-9]+\\.[0-9]+"
+  MESSAGE "OpenClaw browser SSRF to private network blocked. OpenClaw's default browser policy (dangerouslyAllowPrivateNetwork: true) permits navigation to internal services, cloud metadata endpoints (169.254.169.254), and localhost services that are not intended to be browser-accessible. This is Server-Side Request Forgery via the agent's browser. Private network navigation must be explicitly scoped and authorized."
+}
+
+rule ask-openclaw-headless-browser {
+  enabled true
+  priority 85
+  severity warning
+  ASK execution
+  IF command REGEX "openclaw.*(chrome|chromium|puppeteer|playwright).*--headless"
+  OR command REGEX "openclaw.*browser.*headless.*true"
+  OR command REGEX "openclaw.*sandbox.*browser.*--headless"
+  MESSAGE "Headless browser launch via OpenClaw requires review. Headless browsers in OpenClaw's sandbox execute with the same credential access as a headed browser but provide no visual audit trail. Combined with OpenClaw's browser control docs warning ('access to logged-in sessions and accounts'), unmonitored headless execution creates exfiltration risk without detection opportunity."
+  PROMPT "Is headless browser execution necessary here? OpenClaw's browser control grants full access to logged-in sessions. Headless mode removes the visual audit trail. Confirm: (1) destination URLs are trusted and allowlisted, (2) private network navigation is disabled (dangerouslyAllowPrivateNetwork: false), (3) no credential stores are accessed."
+}
+
+rule no-openclaw-browser-file-protocol {
+  enabled true
+  priority 90
+  severity error
+  DENY execution
+  IF command REGEX "openclaw.*(browse|navigate).*file://"
+  OR command REGEX "openclaw.*browser.*url.*file://"
+  OR command REGEX "openclaw.*cdp.*(navigate|goto).*file://"
+  MESSAGE "OpenClaw browser file:// navigation blocked. The file:// protocol allows the browser to read local filesystem contents — including OpenClaw config files, credential stores, session transcripts, and any other local file the browser process can access. This bypasses OpenClaw's filesystem access controls entirely by routing reads through the browser's same-origin-less file access."
+}
+
+rule log-openclaw-browser-launch {
+  enabled true
+  priority 60
+  severity info
+  LOG execution
+  IF command REGEX "openclaw.*(browser|browse|cdp|playwright|puppeteer)"
+  OR command REGEX "openclaw.*sandbox.*browser"
+  MESSAGE "OpenClaw browser tool invocation logged. Browser control is OpenClaw's highest-blast-radius tool: it grants access to logged-in sessions, profile data, stored credentials, and all browser-accessible resources. All browser invocations are audited. Repeated browser launches with navigation to external hosts may indicate session hijacking."
+}

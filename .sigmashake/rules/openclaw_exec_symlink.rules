@@ -1,0 +1,36 @@
+# openclaw_exec_symlink.rules — OpenClaw symlink attack prevention.
+# Technology: openclaw | Capability: exec
+# Covers: symlinks targeting OpenClaw config/state directories,
+# symlinks targeting credential files, and general symlink creation auditing.
+
+rule no-openclaw-symlink-to-config {
+  enabled true
+  priority 95
+  severity error
+  DENY execution
+  IF command REGEX "ln\\s+-s.*\\.openclaw"
+  OR command REGEX "ln\\s+-s.*(openclaw|claw).*(config|state|sessions|transcripts)"
+  OR command REGEX "ln\\s+.*--symbolic.*\\.openclaw"
+  MESSAGE "Symlink creation targeting OpenClaw config or state directories blocked. Symlink attacks replace a trusted file path with a pointer to a different target — allowing an attacker to redirect OpenClaw's config reads/writes to attacker-controlled content, or to expose sensitive state through a world-readable location. OpenClaw validates bind mount sources through symlink resolution, but config file reads do not have the same validation. Symlinks to ~/.openclaw/ or its subdirectories are blocked."
+}
+
+rule no-openclaw-symlink-to-secrets {
+  enabled true
+  priority 100
+  severity error
+  DENY execution
+  IF command REGEX "ln\\s+-s.*(id_rsa|id_ed25519|id_ecdsa|\\.pem|\\.key|credentials|secrets)"
+  OR command REGEX "ln\\s+-s.*(\\.aws|\\.ssh|\\.kube|\\.gnupg)"
+  OR command REGEX "ln\\s+-s.*openclaw.*secrets"
+  MESSAGE "Symlink creation targeting credential files blocked. Creating symlinks to SSH keys, AWS credentials, kubeconfig, or OpenClaw secrets files allows privilege escalation: a process reading the symlink reads the secret, even if the secret file has restrictive permissions but the symlink target is in a readable location. This is a classic TOCTOU/symlink attack vector in shared environments."
+}
+
+rule log-openclaw-symlink-creation {
+  enabled true
+  priority 60
+  severity info
+  LOG execution
+  IF command REGEX "ln\\s+(-s|--symbolic)"
+  OR command REGEX "mklink\\s+/[dh]"
+  MESSAGE "Symlink creation logged in OpenClaw context. Symlink attacks are documented in OpenClaw's security model: 'state or config files targeted by symlinks become different trust boundaries, allowing privilege escalation or state replacement.' All symlink creation is audited for forensic completeness."
+}

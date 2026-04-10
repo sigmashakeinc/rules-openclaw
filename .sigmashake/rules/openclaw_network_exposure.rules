@@ -1,0 +1,84 @@
+# openclaw_network_exposure.rules — OpenClaw network exposure and config safety.
+# Technology: openclaw | Capability: network
+# Covers: reverse proxy tunnel exposure, API key hardcoding,
+# Docker deployment validation, and config change auditing.
+
+rule no-openclaw-tunnel-exposure {
+  enabled true
+  priority 95
+  severity error
+  DENY execution
+  IF command CONTAINS "ngrok" AND command REGEX "(openclaw|claw|moltbook)"
+  OR command CONTAINS "cloudflared tunnel" AND command REGEX "(openclaw|claw)"
+  OR command CONTAINS "localtunnel" AND command REGEX "[0-9]{4}"
+  OR command REGEX "ngrok http [0-9]{4}"
+  MESSAGE "Exposing OpenClaw via tunnel service. 21,639 OpenClaw instances were found publicly exposed on the internet. Using ngrok, Cloudflare Tunnel, or localtunnel to expose OpenClaw is equivalent to binding to a public IP — all internet users can reach the instance, including attackers aware of CVE-2026-25253."
+}
+
+rule no-openclaw-hardcoded-api-key {
+  enabled true
+  priority 95
+  severity error
+  DENY write
+  IF path REGEX "(openclaw|claw).*config" AND content LINE_REGEX "(api_key|token|secret|password)\\s*[:=]\\s*['\"][^'\"]{8,}"
+  OR path REGEX "\\.openclaw/" AND content LINE_REGEX "(api_key|token|secret)\\s*[:=]\\s*['\"][^'\"]{8,}"
+  MESSAGE "Hardcoded credentials in OpenClaw configuration. OpenClaw's documented security posture ('no perfectly secure setup') makes credential files high-value targets. Moltbook (built on OpenClaw) exposed 1.5M API tokens from misconfigured credential storage. Use environment variables for all secrets."
+}
+
+rule ask-openclaw-docker-deployment {
+  enabled true
+  priority 80
+  severity warning
+  ASK write
+  IF path CONTAINS "docker-compose" AND content CONTAINS "openclaw"
+  OR path CONTAINS "docker-compose" AND content REGEX "(openclaw|clawdbot|moltbot)"
+  OR path ENDS_WITH "Dockerfile" AND content CONTAINS "openclaw"
+  MESSAGE "OpenClaw Docker deployment configuration. The 21,639 exposed instance finding included many Docker-deployed instances with misconfigured port bindings. Review before writing."
+  PROMPT "Verify this Docker config: (1) ports bind to '127.0.0.1:PORT:PORT' not '0.0.0.0', (2) image uses a specific SHA digest not 'latest', (3) no privileged: true, (4) no network_mode: host, (5) OpenClaw runs as non-root user."
+}
+
+rule log-openclaw-config-modification {
+  enabled true
+  priority 55
+  severity info
+  LOG write
+  IF path REGEX "\\.openclaw/"
+  OR path REGEX "openclaw.*\\.ya?ml"
+  OR path REGEX "openclaw.*\\.json"
+  OR path REGEX "openclaw.*\\.toml"
+  MESSAGE "OpenClaw configuration file modified. Logging all config changes due to CVE-2026-25253 (RCE via URL parameters) and the 21,639 publicly-exposed instance finding. Config changes are a critical audit point."
+}
+
+rule no-openclaw-mdns-broadcast {
+  enabled true
+  priority 90
+  severity error
+  DENY execution
+  IF command REGEX "(avahi-publish|avahi-daemon|dns-sd|mdns-advertise).*openclaw"
+  OR command REGEX "openclaw.*(mdns|bonjour|zeroconf).*(enable|on|full)"
+  OR command REGEX "mdns.*discovery.*full.*openclaw"
+  MESSAGE "OpenClaw mDNS/Bonjour service advertisement blocked. OpenClaw's mDNS 'full' mode broadcasts service metadata including filesystem paths, SSH ports, and workspace locations to all hosts on the LAN. This operational intelligence aids reconnaissance: an attacker on the same network learns exact paths to config files, credential directories, and paired node details before exploiting CVE-2026-25253."
+}
+
+rule no-openclaw-tailscale-funnel {
+  enabled true
+  priority 95
+  severity error
+  DENY execution
+  IF command REGEX "tailscale\\s+funnel.*[0-9]{4}"
+  OR command REGEX "tailscale\\s+serve.*openclaw"
+  OR command REGEX "openclaw.*(tailscale|tsnet).*funnel"
+  MESSAGE "Exposing OpenClaw via Tailscale Funnel blocked. Tailscale Funnel publishes services to the public internet (not just the Tailnet). Combined with CVE-2026-25253 and the 21,639 exposed-instance finding, funnel-exposed OpenClaw becomes a globally reachable RCE target. Use 'tailscale serve' (Tailnet-only) at most, and only from loopback binding."
+}
+
+rule no-openclaw-lan-binding {
+  enabled true
+  priority 95
+  severity error
+  DENY execution
+  IF command REGEX "openclaw.*--host\\s+192\\.168\\."
+  OR command REGEX "openclaw.*--host\\s+10\\."
+  OR command REGEX "openclaw.*--host\\s+172\\.(1[6-9]|2[0-9]|3[01])\\."
+  OR command REGEX "openclaw.*--bind\\s+(192\\.168|10\\.|172\\.(1[6-9]|2[0-9]|3[01]))"
+  MESSAGE "OpenClaw binding to LAN interface blocked. Binding to RFC 1918 LAN addresses (192.168.x, 10.x, 172.16-31.x) exposes OpenClaw to all devices on the local network. OpenClaw's documented security model explicitly warns that LAN/Tailnet exposure expands the attack surface beyond the intended trusted host. Use 127.0.0.1 exclusively."
+}

@@ -1,0 +1,82 @@
+# openclaw_write_policy.rules — OpenClaw access policy and control plane safety.
+# Technology: openclaw | Capability: write, execution
+# Covers: wildcard group/DM allowlists, missing mention requirements,
+# persistent gateway config mutation, cron job creation, reverse proxy
+# misconfiguration (X-Forwarded-For trust, host-header injection), and policy audit.
+
+rule no-openclaw-wildcard-group-allowlist {
+  enabled true
+  priority 95
+  severity error
+  DENY write
+  IF path REGEX "\\.openclaw/.*" AND content LINE_REGEX "(group|dm|channel).*allow.*:\\s*\\[?\\s*['\"]\\*['\"]"
+  OR path REGEX "openclaw.*\\.(json|ya?ml|toml)" AND content LINE_REGEX "allowlist\\s*[=:]\\s*\\[?\\s*['\"]\\*['\"]"
+  OR path REGEX "openclaw.*\\.(json|ya?ml|toml)" AND content LINE_REGEX "allow_from\\s*[=:]\\s*['\"]\\*['\"]"
+  MESSAGE "Wildcard OpenClaw group/DM allowlist blocked. Setting allowlist to '*' or '\"*\"' permits any sender in a group or DM to invoke the agent's full tool suite. OpenClaw's documentation states this is the primary mechanism for tool-authority delegation attacks: 'any allowed sender can induce tool calls (exec, browser, network/file tools) within the agent's policy'. This configuration allows any group member to trigger exec, browser, or file operations."
+}
+
+rule no-openclaw-missing-mention-requirement {
+  enabled true
+  priority 85
+  severity warning
+  ASK write
+  IF path REGEX "openclaw.*\\.(json|ya?ml|toml)" AND content LINE_REGEX "require_mention\\s*[=:]\\s*(false|0|no)"
+  OR path REGEX "\\.openclaw/.*" AND content LINE_REGEX "requireMention\\s*[=:]\\s*(false|0)"
+  OR path REGEX "openclaw.*group.*\\.(json|ya?ml)" AND content NOT CONTAINS "requireMention"
+  MESSAGE "OpenClaw group config without requireMention gate detected. Without requireMention: true, the bot responds to all group messages — not just explicit @-mentions. In groups, this means any member (or any injected content quoted into the thread) can trigger agent tool calls without mentioning the bot. OpenClaw's documentation explicitly recommends requireMention: true for all group contexts."
+  PROMPT "This OpenClaw group config does not enforce requireMention: true. Without it, every group message triggers the agent — any member or injected content can induce tool calls. Add 'requireMention: true' unless you have a specific reason to respond to all messages."
+}
+
+rule no-openclaw-gateway-config-mutation {
+  enabled true
+  priority 90
+  severity error
+  DENY write
+  IF path REGEX "\\.openclaw/openclaw\\.json" AND content LINE_REGEX "(routes|endpoints|bind|auth)\\s*[=:]"
+  OR path REGEX "\\.openclaw/(openclaw|gateway)\\.(json|toml)" AND content LINE_REGEX "\"(mode|bind|auth)\"\\s*:"
+  MESSAGE "Persistent OpenClaw gateway config mutation blocked. The 'gateway' tool and direct writes to openclaw.json can make permanent changes to binding mode, auth configuration, and routing — changes that persist across restarts. OpenClaw's documentation identifies the gateway tool as a 'control plane' capability that 'can make persistent changes'. Config mutations should be deliberate operator actions, not agent-driven writes."
+}
+
+rule no-openclaw-cron-tool-creation {
+  enabled true
+  priority 85
+  severity warning
+  ASK execution
+  IF command REGEX "openclaw.*cron.*(add|create|new|set)"
+  OR command REGEX "openclaw.*schedule.*(add|create)"
+  OR command CONTAINS "openclaw" AND command REGEX "cron.*\\*.*\\*.*\\*"
+  MESSAGE "OpenClaw cron job creation requires review. The cron tool creates recurring scheduled tasks that persist after the session ends — agent actions with no time limit. OpenClaw's documentation lists the cron tool as a 'control plane tool' with ownership restrictions. Scheduled tasks created by an agent can trigger tool calls indefinitely, converting a one-time compromise into persistent automated execution."
+  PROMPT "This creates a recurring OpenClaw scheduled task. Cron jobs persist after the session and trigger tool calls automatically. Confirm: (1) the schedule and action are intentional, (2) the task is scoped to a specific operation, (3) it does not repeat exec/browser/network calls without human review."
+}
+
+rule no-openclaw-xforwarded-trust {
+  enabled true
+  priority 90
+  severity error
+  DENY write
+  IF path REGEX "openclaw.*\\.(json|ya?ml|toml)" AND content LINE_REGEX "(trust.*proxy|trusted.*proxies|allowRealIp)\\s*[=:]\\s*(true|\\[|\\*)"
+  OR path REGEX "\\.openclaw/.*" AND content LINE_REGEX "X-Forwarded-For.*trust"
+  OR path REGEX "openclaw.*nginx.*\\.conf" AND content LINE_REGEX "set.*\\$remote_addr.*\\$http_x_forwarded_for"
+  MESSAGE "Unsafe X-Forwarded-For trust configuration in OpenClaw context blocked. Trusting X-Forwarded-For without an explicit IP allowlist (gateway.trustedProxies) allows any client to spoof source IPs — bypassing IP-based access controls and rate limiting. OpenClaw's documentation warns: 'proxy should overwrite X-Forwarded-For headers' and 'trusted-proxy auth fails closed on loopback proxies'. Set trustedProxies to an explicit CIDR list, never '*' or 'true'."
+}
+
+rule no-openclaw-host-header-injection {
+  enabled true
+  priority 90
+  severity error
+  DENY write
+  IF path REGEX "openclaw.*\\.(json|ya?ml|toml|conf)" AND content LINE_REGEX "hostname.*\\$\\{?(host|http_host|request\\.headers)"
+  OR path REGEX "openclaw.*(nginx|caddy|traefik).*\\.conf" AND content LINE_REGEX "proxy_set_header Host.*\\$http_host"
+  MESSAGE "Host header injection risk in OpenClaw reverse proxy config blocked. Deriving service hostnames from the HTTP Host header without validation enables Host header injection — an attacker controls the apparent origin of requests, potentially redirecting OpenClaw's callback URLs, poisoning cache keys, or triggering SSRF via internal hostname resolution. OpenClaw's documented proxy hardening requires explicit hostname validation."
+}
+
+rule log-openclaw-policy-file-write {
+  enabled true
+  priority 55
+  severity info
+  LOG write
+  IF path REGEX "\\.openclaw/(policy|rules|permissions|access)"
+  OR path REGEX "openclaw.*\\.(json|ya?ml|toml)" AND path CONTAINS "policy"
+  OR path REGEX "\\.openclaw/agents/.*/policy"
+  MESSAGE "OpenClaw policy or access control file modified. Policy files govern which senders can trigger which tool calls — the primary access control layer over tool-authority delegation. All policy writes are audited. Unexpected policy changes (especially expansion of allowlists or addition of elevated access) may indicate config mutation attacks via the gateway tool."
+}

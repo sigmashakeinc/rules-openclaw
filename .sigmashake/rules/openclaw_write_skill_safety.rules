@@ -1,0 +1,94 @@
+# openclaw_write_skill_safety.rules — OpenClaw skill write safety.
+# Technology: openclaw | Capability: write
+# Covers: malicious skill shell execution, network access in skills,
+# filesystem access outside skill directory, ClawHub publishing safety, and skill audit.
+
+rule no-openclaw-skill-shell-execution {
+  enabled true
+  priority 95
+  severity error
+  DENY write
+  IF path REGEX "skills/.*\\.(py|js|ts|sh)" AND content LINE_REGEX "subprocess\\.(run|call|check_output|Popen)"
+  OR path REGEX "skills/.*\\.(py|js|ts|sh)" AND content LINE_REGEX "os\\.system\\s*\\("
+  OR path REGEX "skills/.*\\.(py|js|ts|sh)" AND content LINE_REGEX "child_process\\.(exec|spawn|execSync)"
+  OR path REGEX "skills/.*\\.(py|js|ts|sh)" AND content LINE_REGEX "require\\s*\\(['\"]child_process['\"]\\)"
+  MESSAGE "OpenClaw skill with shell execution capability. 820+ malicious skills on ClawHub use subprocess/exec to achieve: unauthorized crypto-mining, data exfiltration to C2 servers, and persistent backdoors. Skills with shell access require mandatory manual security review before deployment."
+}
+
+rule ask-openclaw-skill-network-access {
+  enabled true
+  priority 90
+  severity warning
+  ASK write
+  IF path REGEX "skills/.*\\.(py|js|ts|sh)" AND content LINE_REGEX "requests\\.(get|post|put|delete|patch)"
+  OR path REGEX "skills/.*\\.(py|js|ts|sh)" AND content LINE_REGEX "fetch\\s*\\("
+  OR path REGEX "skills/.*\\.(py|js|ts|sh)" AND content LINE_REGEX "urllib\\.(request|urlopen)"
+  OR path REGEX "skills/.*\\.(py|js|ts|sh)" AND content LINE_REGEX "http\\.client"
+  MESSAGE "OpenClaw skill with network access capability. Malicious ClawHub skills exfiltrate data via HTTP requests. OpenClaw's network-enabled agents were used in the Mexican government attack (early March 2026) that compromised 100M+ citizen records."
+  PROMPT "Does this skill need network access? If yes: (1) is the destination hostname hardcoded and trusted? (2) is only required data transmitted? (3) are responses validated? 7.7% of ClawHub skills are malicious — network access is the primary exfiltration vector."
+}
+
+rule ask-openclaw-skill-filesystem-escape {
+  enabled true
+  priority 85
+  severity warning
+  ASK write
+  IF path REGEX "skills/.*\\.(py|js|ts|sh)" AND content LINE_REGEX "open\\s*\\(['\"]/"
+  OR path REGEX "skills/.*\\.(py|js|ts|sh)" AND content LINE_REGEX "readFileSync\\s*\\(['\"]/"
+  OR path REGEX "skills/.*\\.(py|js|ts|sh)" AND content LINE_REGEX "fs\\.(read|write)File.*['\"]/"
+  MESSAGE "OpenClaw skill accessing absolute filesystem path. Skills should be sandboxed to their own directory. Malicious skills use filesystem access to read API credentials (~/.openclaw/, .env), modify system configs, or establish persistence."
+  PROMPT "Does this skill access files outside the skills directory? Skills should only read/write relative paths within their own scope. Absolute paths like /home, /etc, or project roots enable credential theft and persistence."
+}
+
+rule ask-openclaw-clawhub-publish {
+  enabled true
+  priority 90
+  severity warning
+  ASK execution
+  IF command CONTAINS "clawhub publish"
+  OR command CONTAINS "clawhub push"
+  OR command REGEX "openclaw.*skill.*publish"
+  OR command REGEX "openclaw.*skill.*upload"
+  MESSAGE "Publishing to ClawHub. 820+ malicious skills have been identified out of 10,700 (7.7% malware rate) — increasing rapidly. Publishing skills without security review contributes to the ClawHub supply chain problem."
+  PROMPT "Before publishing: (1) no shell execution (subprocess/child_process), (2) no network calls to external hosts, (3) no filesystem access outside skill directory, (4) no credential reading, (5) no obfuscated code. The ClawHub malware rate is 7.7%."
+}
+
+rule log-openclaw-skill-file-access {
+  enabled true
+  priority 55
+  severity info
+  LOG read
+  IF path REGEX "skills/.*\\.(py|js|ts|sh)"
+  OR path REGEX "skills/.*\\.rules"
+  MESSAGE "OpenClaw skill file accessed. 820+ malicious skills documented on ClawHub. All skill file reads logged for behavioral audit. Multiple rapid reads of different skill files may indicate skill scanning reconnaissance."
+}
+
+rule no-openclaw-skill-prompt-injection {
+  enabled true
+  priority 100
+  severity error
+  DENY write
+  IF path REGEX "(skills|\\.openclaw)/.*\\.(md|txt|json|ya?ml)" AND content LINE_REGEX "(?i)(ignore (previous|above|prior)|disregard (your|all)|new instruction|SYSTEM:|\\[INST\\]|<\\|im_start\\||forget (your|previous))"
+  OR path REGEX "(skills|\\.openclaw)/.*\\.(md|txt|json|ya?ml)" AND content LINE_REGEX "(?i)(you are now|act as a|pretend you|your new role|your new persona)"
+  MESSAGE "Prompt injection detected in OpenClaw skill or config content. Injection markers ('ignore previous instructions', 'SYSTEM:', role-overriding phrases) are the primary mechanism for attacking agents via untrusted content — documented as OpenClaw's most significant risk. Even with strong system prompts, injection in skill descriptions or config files can redirect agent behavior."
+}
+
+rule no-openclaw-npm-lifecycle-scripts {
+  enabled true
+  priority 95
+  severity error
+  DENY write
+  IF path REGEX "(skills|\\.openclaw)/.*package\\.json" AND content LINE_REGEX "\"(preinstall|postinstall|prepare|prepack|postpack)\""
+  MESSAGE "npm lifecycle scripts in OpenClaw skill package.json blocked. preinstall/postinstall/prepare scripts execute automatically during 'npm install --omit=dev' — OpenClaw's documented plugin installation mechanism. Malicious ClawHub skills use these hooks for persistence and immediate code execution during install, before any runtime policy can intervene. Lifecycle scripts in skill packages require explicit manual review."
+}
+
+rule no-openclaw-skill-dynamic-require {
+  enabled true
+  priority 90
+  severity error
+  DENY write
+  IF path REGEX "skills/.*\\.(js|ts)" AND content LINE_REGEX "require\\s*\\([^'\"][^)]*\\)"
+  OR path REGEX "skills/.*\\.(js|ts)" AND content LINE_REGEX "import\\s*\\([^'\"`][^)]*\\)"
+  OR path REGEX "skills/.*\\.(js|ts)" AND content LINE_REGEX "__import__\\s*\\([^'\"][^)]*\\)"
+  MESSAGE "Dynamic module loading in OpenClaw skill blocked. require(variable) and import(expression) load modules whose identity is determined at runtime — bypassing static analysis that would catch malicious dependency names. 820+ malicious ClawHub skills use this pattern to load payloads conditionally, evading both the built-in dangerous-code scanner and manual review. All skill imports must use string literals."
+}
