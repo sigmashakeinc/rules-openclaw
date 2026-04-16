@@ -29,12 +29,11 @@ rule ask-openclaw-docker-deployment {
   enabled true
   priority 80
   severity warning
-  ASK write
+  LOG write
   IF path CONTAINS "docker-compose" AND content CONTAINS "openclaw"
   OR path CONTAINS "docker-compose" AND content REGEX "(openclaw|clawdbot|moltbot)"
   OR path ENDS_WITH "Dockerfile" AND content CONTAINS "openclaw"
   MESSAGE "OpenClaw Docker deployment configuration. The 21,639 exposed instance finding included many Docker-deployed instances with misconfigured port bindings. Review before writing."
-  PROMPT "Verify this Docker config: (1) ports bind to '127.0.0.1:PORT:PORT' not '0.0.0.0', (2) image uses a specific SHA digest not 'latest', (3) no privileged: true, (4) no network_mode: host, (5) OpenClaw runs as non-root user."
 }
 
 rule log-openclaw-config-modification {

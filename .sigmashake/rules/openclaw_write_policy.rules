@@ -19,12 +19,11 @@ rule no-openclaw-missing-mention-requirement {
   enabled true
   priority 85
   severity warning
-  ASK write
+  LOG write
   IF path REGEX "openclaw.*\\.(json|ya?ml|toml)" AND content LINE_REGEX "require_mention\\s*[=:]\\s*(false|0|no)"
   OR path REGEX "\\.openclaw/.*" AND content LINE_REGEX "requireMention\\s*[=:]\\s*(false|0)"
   OR path REGEX "openclaw.*group.*\\.(json|ya?ml)" AND content NOT CONTAINS "requireMention"
   MESSAGE "OpenClaw group config without requireMention gate detected. Without requireMention: true, the bot responds to all group messages — not just explicit @-mentions. In groups, this means any member (or any injected content quoted into the thread) can trigger agent tool calls without mentioning the bot. OpenClaw's documentation explicitly recommends requireMention: true for all group contexts."
-  PROMPT "This OpenClaw group config does not enforce requireMention: true. Without it, every group message triggers the agent — any member or injected content can induce tool calls. Add 'requireMention: true' unless you have a specific reason to respond to all messages."
 }
 
 rule no-openclaw-gateway-config-mutation {

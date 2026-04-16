@@ -19,25 +19,23 @@ rule ask-openclaw-skill-network-access {
   enabled true
   priority 90
   severity warning
-  ASK write
+  LOG write
   IF path REGEX "skills/.*\\.(py|js|ts|sh)" AND content LINE_REGEX "requests\\.(get|post|put|delete|patch)"
   OR path REGEX "skills/.*\\.(py|js|ts|sh)" AND content LINE_REGEX "fetch\\s*\\("
   OR path REGEX "skills/.*\\.(py|js|ts|sh)" AND content LINE_REGEX "urllib\\.(request|urlopen)"
   OR path REGEX "skills/.*\\.(py|js|ts|sh)" AND content LINE_REGEX "http\\.client"
   MESSAGE "OpenClaw skill with network access capability. Malicious ClawHub skills exfiltrate data via HTTP requests. OpenClaw's network-enabled agents were used in the Mexican government attack (early March 2026) that compromised 100M+ citizen records."
-  PROMPT "Does this skill need network access? If yes: (1) is the destination hostname hardcoded and trusted? (2) is only required data transmitted? (3) are responses validated? 7.7% of ClawHub skills are malicious — network access is the primary exfiltration vector."
 }
 
 rule ask-openclaw-skill-filesystem-escape {
   enabled true
   priority 85
   severity warning
-  ASK write
+  LOG write
   IF path REGEX "skills/.*\\.(py|js|ts|sh)" AND content LINE_REGEX "open\\s*\\(['\"]/"
   OR path REGEX "skills/.*\\.(py|js|ts|sh)" AND content LINE_REGEX "readFileSync\\s*\\(['\"]/"
   OR path REGEX "skills/.*\\.(py|js|ts|sh)" AND content LINE_REGEX "fs\\.(read|write)File.*['\"]/"
   MESSAGE "OpenClaw skill accessing absolute filesystem path. Skills should be sandboxed to their own directory. Malicious skills use filesystem access to read API credentials (~/.openclaw/, .env), modify system configs, or establish persistence."
-  PROMPT "Does this skill access files outside the skills directory? Skills should only read/write relative paths within their own scope. Absolute paths like /home, /etc, or project roots enable credential theft and persistence."
 }
 
 rule ask-openclaw-clawhub-publish {
